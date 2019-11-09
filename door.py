@@ -23,6 +23,9 @@ val=0.36
 def Exit_gracefully(signal,frame):
 	open_gate(1,0)
 	GPIO.cleanup()
+	client.publish("Door/joystick2", None, 0, True)
+	client.publish("Hatch/control", None, 0, True)
+	client.publish("Door/msg", None, 0, True)
 	client.disconnect()
 	print("Smart Door: Stoping services")
 		
@@ -59,7 +62,7 @@ def on_message(client, userdata, msg):
     res3=str3.split("'")
 
     if (msg.topic== "Door/camera2"):
-    # Rotating STEPPER 
+
         
         print("MQTT: Capturing Image")
         subprocess.call(["fswebcam","--no-banner","-r","400x400","-F","8","-q","./test1/unknown_image.jpg"])
@@ -68,10 +71,12 @@ def on_message(client, userdata, msg):
         dt=now.strftime("%d:%m:%y_%H:%M:%S")
 
         subprocess.call(["cp","./test1/unknown_image.jpg","./log/"+dt+".jpg"])
+    
         print("Saved in logs")
         subprocess.call(["cp","./test1/unknown_image.jpg","./gdrive/"+dt+".jpg"])
+        
         print("Uploading to cloud...")
-        subprocess.call(["drive","push","-no-prompt","-force","-quiet","./gdrive"])
+        subprocess.call(["drive","push","-no-prompt","-quiet","./gdrive"])
         print("Uploaded successfully!")
 	
     if (msg.topic== "Door/joystick2") :
@@ -111,19 +116,18 @@ def on_message(client, userdata, msg):
         print(no2)
         print(no3)
         dt=now.strftime("%d:%m:%y_%H:%M:%S")
-        img=qrcode.make(res4[0])
+        img=qrcode.make(res4[0]+dt)
 	
         img.save("./qr_code/QR_"+dt+".png")
         img.save("./gdrive/QR_"+dt+".png")
         f=open('./qr_code/code.txt','a')
-        print("came")
-        x=str(res4[0])+" "+no2+" "+no3+" \n"
+        x=str(res4[0])+dt+" "+no2+" "+no3+" \n"
         print(x)
         f.write(x)
         f.close()
         
         print("Uploading to cloud...")
-        subprocess.call(["drive","push","-no-prompt","-force","-quiet","./gdrive"])
+        subprocess.call(["drive","push","-no-prompt","-quiet","./gdrive"])
         print("Uploaded successfully!")
 		
         
@@ -208,7 +212,7 @@ def open_gate(dir,val2):
 			#print(door_open)
 	else:
 		while (door_open>val2):
-			motor_func(1,val+0.2,1)
+			motor_func(1,val+0.4,1)
 			#print("came here")
 			time.sleep(0.2)
 			door_open-=1
@@ -267,64 +271,7 @@ def printKey(key):
             matrix_count=0
     elif(key == '#' and matrix==-1):
 
-    	print("Door Access: Image capture (QR code)")
-    	subprocess.call(["fswebcam","--no-banner","-r","1280x720","-F","4","-q","./qr_code/qr_image.jpg"])
-    	print ('Scanning Image..')
-    	f = open('./qr_code/qr_image.jpg','rb')
-    	qr = PIL.Image.open(f);
-    	qr.load()
-
-    	codes = zbarlight.scan_codes('qrcode',qr)
     	
-    	if(codes==None):
-       
-        	print ('No QR code found')
-
-    	else:
-        	print ('QR code(s):')
-        	print (codes)
-        	res2=str(codes[0]).split("'")
-        	print(res2)
-        	f=open('./qr_code/code.txt','r+')
-        	line = f.readline()
-        	cnt=1
-        	target=-1
-        	while line:
-                        res=line.split(" ")
-                        if(str(res2[1])==str(res[0])):
-                            	target=cnt
-                            	now=datetime.now()
-				
-                            	format="%y-%m-%d %H:%M:%S"
-                            	n=now.strftime(format)
-                            	print(res)
-                            	now1=datetime.strptime(str(res[1])+" "+str(res[2]),format)
-                            	now2=datetime.strptime(str(res[3])+" "+str(res[4]),format)
-                            	now=datetime.strptime(n,format)
-                            	print(now1)
-                            	print(now2)
-                            	print(now)
-                            	if(now>=now1 and now<=now2):
-                            	    	print("Door Access: Opening")
-                            	    	open_gate(-1,10)			
-                        line=f.readline()
-                        cnt+=1  
-        	f.close()
-        	if(target!=-1):
-                        f=open('./qr_code/code.txt','r+')
-                        line = f.readline()
-                        cnt=1
-                        f.seek(0)
-                        while line:
-                            	if(cnt!=target):
-                            	    	f.write(line)
-				
-                            	cnt+=1
-                        f.truncate()
-                        f.close()
-
-
-        	return 
 
 
 
@@ -411,7 +358,7 @@ def printKey(key):
         time.sleep(1)
         matrix=-1
         matrix_count=0
-    elif(key == 'D'):
+    elif(key == '1'):
         
                
         print("Hatch Access: Opening")
@@ -421,7 +368,7 @@ def printKey(key):
         time.sleep(0.5)
         matrix=-1
         matrix_count=0
-    elif(key == '1' and matrix==-1):
+    elif(key == '2' and matrix==-1):
         
                 
         print("Hatch Access: Closing")
@@ -431,6 +378,74 @@ def printKey(key):
         time.sleep(0.5)
         matrix=-1
         matrix_count=0
+
+    elif(key == 'D' and matrix==-1):
+        
+                
+        print("Door Access: Image capture (QR code)")
+        subprocess.call(["fswebcam","--no-banner","-r","1280x720","-F","4","-q","./qr_code/qr_image.jpg"])
+        print ('Scanning Image..')
+        f = open('./qr_code/qr_image.jpg','rb')
+        qr = PIL.Image.open(f);
+        qr.load()
+
+        codes = zbarlight.scan_codes('qrcode',qr)
+    	
+        if(codes==None):
+       
+        	print ('No QR code found')
+
+        else:
+        	print ('QR code(s):')
+        	print (codes)
+        	res2=str(codes[0]).split("'")
+        	print(res2)
+        	f=open('./qr_code/code.txt','r+')
+        	line = f.readline()
+        	cnt=1
+        	target=-1
+        	while line:
+                        res=line.split(" ")
+			
+                        if(str(res2[1])==str(res[0])):
+                            	target=cnt
+                            	now=datetime.now()
+				
+                            	format="%y-%m-%d %H:%M:%S"
+                            	n=now.strftime(format)
+                            	print(res)
+                            	now1=datetime.strptime(str(res[1])+" "+str(res[2]),format)
+                            	now2=datetime.strptime(str(res[3])+" "+str(res[4]),format)
+                            	now=datetime.strptime(n,format)
+                            	print(now1)
+                            	print(now2)
+                            	print(now)
+                            	if(now>=now1 and now<=now2):
+                            	    	print("Door Access: Opening")
+                            	    	open_gate(-1,10)			
+                        line=f.readline()
+                        cnt+=1  
+        	f.close()
+        	if(target!=-1):
+                        f=open('./qr_code/code.txt','r')
+                        f.seek(0)
+                        line = f.readline()
+                        cnt=1
+                        f2=open('./qr_code/temp.txt','w')
+                        
+                        while line:
+                            	if(cnt!=target):
+                            	    	f2.write(line)
+                            	line = f.readline()
+				
+                            	cnt+=1
+                        f.close()
+                        f2.close()
+                        subprocess.call(["rm","-r","./qr_code/code.txt"])
+                        subprocess.call(["mv","./qr_code/temp.txt","./qr_code/code.txt"])
+		
+
+
 	
         
         
@@ -668,6 +683,9 @@ while True:
     # Rotating STEPPER 
     dist1=distance(GPIO_TRIGGER,GPIO_ECHO)
     dist5=distance(GPIO_TRIGGER,GPIO_ECHO)
+    if(dist1<12 and dist5<12):
+        time.sleep(0.1)
+    dist6=distance(GPIO_TRIGGER,GPIO_ECHO)
     #print("came here 3")
     #dist2=distance(27,4)
     #dist3=distance(15,12)
@@ -681,7 +699,7 @@ while True:
     #if(matrix==-1):
     	#print("second %f"%dist3)
 
-    if(matrix==-2):
+    if(matrix==-1):
         if(GPIO.input(ir1)==0):
             print("IR1")
             if(sensor2==0):
@@ -714,11 +732,12 @@ while True:
     	
     
     #if(matrix==-1):
-       #print(dist1)
+       #print("dist1: %f"%dist1)
        #print(dist5)
+       #print(dist6)	
     stop=1
     #dist5=10   #shit
-    if(dist1<8 or dist5<8 ):
+    if(dist1<10 or dist5<10 or dist6<10):
         stop=0
     
     if(values[0]<15000 and values[0]>7000 and matrix ==-1 and door_open<10):
@@ -727,7 +746,7 @@ while True:
         client.publish("Door/open_stats",str(10-door_open))
         print(door_open)
     if(values[0]>25000 and values[0]<32000 and (stop or door_open<=1) and matrix==-1 and door_open>0):
-        motor_func(1,val+0.2,1)
+        motor_func(1,val+0.4,1)
         door_open-=1
         client.publish("Door/open_stats",str(10-door_open))
         print(door_open)
