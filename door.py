@@ -34,14 +34,20 @@ signal.signal(signal.SIGINT,Exit_gracefully)
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
     print("Connected with result code "+str(rc))
+    client.publish("Door/open_stats","10")
+    client.publish("Door/hatch_stat","Close")
  
     # Subscribing in on_connect() - if we lose the connection and
     # reconnect then subscriptions will be renewed.
-    client.subscribe("Door/joystick")
+    client.subscribe("Door/joystick2")
     client.subscribe("Door/camera2")
     client.subscribe("Door/msg")
     client.subscribe("Hatch/control")
     client.subscribe("Door/qr")
+    client.subscribe("Door/open_stats")
+    client.subscribe("Door/hatch_stat")
+    client.subscribe("Door/message")
+    client.subscribe("Door/camera3")
  
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
@@ -52,7 +58,7 @@ def on_message(client, userdata, msg):
 
     res3=str3.split("'")
 
-    if (res3[1] == "capture" and msg.topic== "Door/camera2"):
+    if (msg.topic== "Door/camera2"):
     # Rotating STEPPER 
         
         print("MQTT: Capturing Image")
@@ -67,7 +73,8 @@ def on_message(client, userdata, msg):
         print("Uploading to cloud...")
         subprocess.call(["drive","push","-no-prompt","-force","-quiet","./gdrive"])
         print("Uploaded successfully!")
-    if (msg.topic== "Door/joystick") :
+	
+    if (msg.topic== "Door/joystick2") :
         res4=int(res3[1])
         print("MQTT: Joystick control")
         open_gate(1,10-res4)
@@ -139,6 +146,7 @@ client.loop_start()
 
 
 
+
 #******************************************#
 KEYPAD = [
     ["1", "2", "3", "A"],
@@ -204,6 +212,7 @@ def open_gate(dir,val2):
 			#print("came here")
 			time.sleep(0.2)
 			door_open-=1
+	client.publish("Door/open_stats",str(10-door_open))
 
 
 
@@ -404,7 +413,7 @@ def printKey(key):
         matrix_count=0
     elif(key == 'D'):
         
-                
+               
         print("Hatch Access: Opening")
         motor_func2(1,open_time)
 
@@ -578,12 +587,14 @@ def motor_func(direction,t,loops):
 			GPIO.output(pin1,GPIO.LOW)
 			GPIO.output(pin2,GPIO.LOW)
 		i+=1
+	
 
 def motor_func2(direction,t):
 	
 	
 	if(direction== -1):
 		print("DOWN")
+		client.publish("Door/hatch_stat","Close")
 		
 		GPIO.output(pin3,GPIO.HIGH)
 		GPIO.output(pin4,GPIO.LOW)
@@ -592,6 +603,7 @@ def motor_func2(direction,t):
 		GPIO.output(pin4,GPIO.LOW)
 	else:
 		print("UP")
+		client.publish("Door/hatch_stat","Open")
 		GPIO.output(pin3,GPIO.LOW)
 		GPIO.output(pin4,GPIO.HIGH)
 		time.sleep(t)
@@ -712,10 +724,12 @@ while True:
     if(values[0]<15000 and values[0]>7000 and matrix ==-1 and door_open<10):
         motor_func(-1,val,1)
         door_open+=1
+        client.publish("Door/open_stats",str(10-door_open))
         print(door_open)
     if(values[0]>25000 and values[0]<32000 and (stop or door_open<=1) and matrix==-1 and door_open>0):
         motor_func(1,val+0.2,1)
         door_open-=1
+        client.publish("Door/open_stats",str(10-door_open))
         print(door_open)
     if(matrix_time + 10 <time.time() and matrix==1):
         print('Door Access: Press * again to enter password (auto reset)')
