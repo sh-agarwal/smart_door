@@ -305,11 +305,13 @@ def printKey(key):
                         f=open('./qr_code/code.txt','r+')
                         line = f.readline()
                         cnt=1
+                        f.seek(0)
                         while line:
                             	if(cnt!=target):
                             	    	f.write(line)
 				
                             	cnt+=1
+                        f.truncate()
                         f.close()
 
 
