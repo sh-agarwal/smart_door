@@ -12,6 +12,7 @@ import zbarlight
 import PIL
 import qrcode
 from datetime import timedelta
+import face_recognition
 
 
 GPIO.setwarnings(False)
@@ -146,6 +147,9 @@ client.connect_async("broker.hivemq.com", 1883, 60)
 # https://github.com/eclipse/paho.mqtt.python
 # for information on how to use other loop*() functions
 client.loop_start()
+
+picture_of_me=face_recognition.load_image_file("./test/ssr.jpg")
+my_face_encoding=face_recognition.face_encodings(picture_of_me)[0]
 
 
 
@@ -283,9 +287,19 @@ def printKey(key):
       
         
     	print("Processing...")
-    	proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./test/","./test1/"],stdout=subprocess.PIPE)
-    	output=proc.stdout.read()
-    	line=str(output)
+    	unknown_pic=face_recognition.load_image_file("./test1/unknown_image.jpg")
+    	list2=face_recognition.face_encodings(unknown_pic)
+    	if(len(list2)==0):
+                print("No face detected")
+                return
+    	unknown_face_encoding=face_recognition.face_encodings(unknown_pic)[0]
+    	#proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./test/","./test1/"],stdout=subprocess.PIPE)
+    	#output=proc.stdout.read()
+    	#line=str(output)
+    	results=face_recognition.compare_faces([my_face_encoding],unknown_face_encoding)
+    	
+    	print(results[0])
+    	return
     	res=line.split(',')
     	str2=res[1]
     	res2=str2.split('\\')
