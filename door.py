@@ -10,6 +10,8 @@ import paho.mqtt.client as mqtt
 import signal
 import zbarlight
 import PIL
+import qrcode
+from datetime import timedelta
 
 
 GPIO.setwarnings(False)
@@ -49,7 +51,7 @@ def on_message(client, userdata, msg):
     str3=str(msg.payload)
 
     res3=str3.split("'")
-   
+
     if (res3[1] == "capture" and msg.topic== "Door/camera2"):
     # Rotating STEPPER 
         
@@ -86,11 +88,33 @@ def on_message(client, userdata, msg):
                 hatch_time=time.time()
                 hatch_open=0
     if(msg.topic== "Door/qr"):
+        
         print(res3[1])
+        res4=res3[1].split(" ")
         now=datetime.now()
+        now1=datetime.now() + timedelta(hours=int(res4[1]))
+        now2=datetime.now() + timedelta(hours=int(res4[2])+int(res4[1]))
+     
+        no=now.strftime("%d-%m-%y %H:%M:%S")
+        
+        no2=now1.strftime("%y-%m-%d %H:%M:%S")
+        no3=now2.strftime("%y-%m-%d %H:%M:%S")
+        
+        print(no)
+        print(no2)
+        print(no3)
         dt=now.strftime("%d:%m:%y_%H:%M:%S")
-        subprocess.call(["qr",res3[1],">","./qr_code/QR_"+dt+".png"])
-        subprocess.call(["cp","./qr_code/QR_"+dt+".png","./gdrive/QR_"+dt+".png"])
+        img=qrcode.make(res4[0])
+	
+        img.save("./qr_code/QR_"+dt+".png")
+        img.save("./gdrive/QR_"+dt+".png")
+        f=open('./qr_code/code.txt','a')
+        print("came")
+        x=str(res4[0])+" "+no2+" "+no3+" \n"
+        print(x)
+        f.write(x)
+        f.close()
+        
         print("Uploading to cloud...")
         subprocess.call(["drive","push","-no-prompt","-force","-quiet","./gdrive"])
         print("Uploaded successfully!")
@@ -104,7 +128,7 @@ client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
  
-client.connect_async("85.119.83.194", 1883, 60)
+client.connect_async("broker.hivemq.com", 1883, 60)
 
 # Process network traffic and dispatch callbacks. This will also handle
 # reconnecting. Check topen_gate(dir,val2)he documentation at
@@ -250,40 +274,79 @@ def printKey(key):
     	else:
         	print ('QR code(s):')
         	print (codes)
+        	res2=str(codes[0]).split("'")
+        	print(res2)
+        	f=open('./qr_code/code.txt','r+')
+        	line = f.readline()
+        	cnt=1
+        	target=-1
+        	while line:
+                        res=line.split(" ")
+                        if(str(res2[1])==str(res[0])):
+                            	target=cnt
+                            	now=datetime.now()
+				
+                            	format="%y-%m-%d %H:%M:%S"
+                            	n=now.strftime(format)
+                            	print(res)
+                            	now1=datetime.strptime(str(res[1])+" "+str(res[2]),format)
+                            	now2=datetime.strptime(str(res[3])+" "+str(res[4]),format)
+                            	now=datetime.strptime(n,format)
+                            	print(now1)
+                            	print(now2)
+                            	print(now)
+                            	if(now>=now1 and now<=now2):
+                            	    	print("Door Access: Opening")
+                            	    	open_gate(-1,10)			
+                        line=f.readline()
+                        cnt+=1  
+        	f.close()
+        	if(target!=-1):
+                        f=open('./qr_code/code.txt','r+')
+                        line = f.readline()
+                        cnt=1
+                        while line:
+                            	if(cnt!=target):
+                            	    	f.write(line)
+				
+                            	cnt+=1
+                        f.close()
+
+
         	return 
 
 
 
-        print("Door Access: Be Ready for Image capture")
-        subprocess.call(["fswebcam","--no-banner","-r","400x400","-F","8","-q","./test1/unknown_image.jpg"])
+    	print("Door Access: Be Ready for Image capture")
+    	subprocess.call(["fswebcam","--no-banner","-r","400x400","-F","8","-q","./test1/unknown_image.jpg"])
         
-        now=datetime.now()
-        dt=now.strftime("%d:%m:%y_%H:%M:%S")
+    	now=datetime.now()
+    	dt=now.strftime("%d:%m:%y_%H:%M:%S")
       
         
-        print("Processing...")
-        proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./test/","./test1/"],stdout=subprocess.PIPE)
-        output=proc.stdout.read()
-        line=str(output)
-        res=line.split(',')
-        str2=res[1]
-        res2=str2.split('\\')
-        res3="A person is waiting outside"
-        if(res2[0]=="unknown_person"):
+    	print("Processing...")
+    	proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./test/","./test1/"],stdout=subprocess.PIPE)
+    	output=proc.stdout.read()
+    	line=str(output)
+    	res=line.split(',')
+    	str2=res[1]
+    	res2=str2.split('\\')
+    	res3="A person is waiting outside"
+    	if(res2[0]=="unknown_person"):
                 subprocess.call(["say",res3])
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_unknown_person_"+dt+".jpg"])
                 print("Door Access: No Match")  
-        elif(res2[0]=="no_persons_found"):
+    	elif(res2[0]=="no_persons_found"):
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_noone_detected_"+dt+".jpg"])
                 print("Door Access: No Face Found")                
-        else:
+    	else:
                 subprocess.call(["say",res2[0],"has","arrived"])
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_"+res2[0]+"_"+dt+".jpg"])
                 print("Door Access: Opening")
                 open_gate(-1,10)
-        time.sleep(1)
-        matrix=-1
-        matrix_count=0
+    	time.sleep(1)
+    	matrix=-1
+    	matrix_count=0
 
     elif(key == 'A' and matrix==-1):
       
@@ -575,7 +638,7 @@ while True:
     values = [0]*4
     for i in range(4):
         # Read the specified ADC channel using the previously set gain value.
-        values[i] = adc.read_adc(i, gain=GAIN)
+        values[i] =adc.read_adc(i, gain=GAIN)
         # Note you can also pass in an optional data_rate parameter that controls
         # the ADC conversion time (in samples/second). Each chip has a different
         # set of allowed data rate values, see datasheet Table 9 config register
@@ -604,7 +667,7 @@ while True:
     #if(matrix==-1):
     	#print("second %f"%dist3)
 
-    if(matrix==-1):
+    if(matrix==-2):
         if(GPIO.input(ir1)==0):
             print("IR1")
             if(sensor2==0):
