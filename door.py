@@ -8,6 +8,9 @@ from pad4pi import rpi_gpio
 import subprocess
 import paho.mqtt.client as mqtt
 import signal
+import zbarlight
+import PIL
+
 
 GPIO.setwarnings(False)
 
@@ -36,6 +39,7 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("Door/camera2")
     client.subscribe("Door/msg")
     client.subscribe("Hatch/control")
+    client.subscribe("Door/qr")
  
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
@@ -81,6 +85,15 @@ def on_message(client, userdata, msg):
                 motor_func2(-1,close_time)
                 hatch_time=time.time()
                 hatch_open=0
+    if(msg.topic== "Door/qr"):
+        print(res3[1])
+        now=datetime.now()
+        dt=now.strftime("%d:%m:%y_%H:%M:%S")
+        subprocess.call(["qr",res3[1],">","./qr_code/QR_"+dt+".png"])
+        subprocess.call(["cp","./qr_code/QR_"+dt+".png","./gdrive/QR_"+dt+".png"])
+        print("Uploading to cloud...")
+        subprocess.call(["drive","push","-no-prompt","-force","-quiet","./gdrive"])
+        print("Uploaded successfully!")
 		
         
 
@@ -219,7 +232,27 @@ def printKey(key):
                         block_time=time.time()
             matrix=-1
             matrix_count=0
-    elif(key == '#'):
+    elif(key == '#' and matrix==-1):
+
+    	print("Door Access: Image capture (QR code)")
+    	subprocess.call(["fswebcam","--no-banner","-r","1280x720","-F","4","-q","./qr_code/qr_image.jpg"])
+    	print ('Scanning Image..')
+    	f = open('./qr_code/qr_image.jpg','rb')
+    	qr = PIL.Image.open(f);
+    	qr.load()
+
+    	codes = zbarlight.scan_codes('qrcode',qr)
+    	
+    	if(codes==None):
+       
+        	print ('No QR code found')
+
+    	else:
+        	print ('QR code(s):')
+        	print (codes)
+        	return 
+
+
 
         print("Door Access: Be Ready for Image capture")
         subprocess.call(["fswebcam","--no-banner","-r","400x400","-F","8","-q","./test1/unknown_image.jpg"])
@@ -252,7 +285,7 @@ def printKey(key):
         matrix=-1
         matrix_count=0
 
-    elif(key == 'A'):
+    elif(key == 'A' and matrix==-1):
       
         print("Door Access: Reading RFID")
         id, text = reader.read()
@@ -265,7 +298,7 @@ def printKey(key):
         subprocess.call(["say",text,"has","arrived"])
         print("Door Access: Opening")
         open_gate(-1,10)
-    elif(key == 'B'):
+    elif(key == 'B' and matrix==-1):
         if(hatch_open==0):
                 print("Hatch Access: Be Ready for Image capture")
                 subprocess.call(["fswebcam","--no-banner","-r","400x400","-F","8","-q","./test1/unknown_image.jpg"])
