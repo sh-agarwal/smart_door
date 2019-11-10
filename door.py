@@ -1,4 +1,4 @@
-
+from __future__ import print_function
 import sys
 import time
 from datetime import datetime
@@ -12,7 +12,119 @@ import zbarlight
 import PIL
 import qrcode
 from datetime import timedelta
-import face_recognition
+
+import os
+import re
+import face_recognition.api as face_recognition
+import multiprocessing
+import itertools
+import sys
+import PIL.Image
+import numpy as np
+
+def scan_known_people(known_people_folder):
+    known_names = []
+    known_face_encodings = []
+
+    for file in image_files_in_folder(known_people_folder):
+        basename = os.path.splitext(os.path.basename(file))[0]
+        img = face_recognition.load_image_file(file)
+        encodings = face_recognition.face_encodings(img)
+
+        if len(encodings) > 1:
+            click.echo("WARNING: More than one face found in {}. Only considering the first face.".format(file))
+
+        if len(encodings) == 0:
+            click.echo("WARNING: No faces found in {}. Ignoring file.".format(file))
+        else:
+            known_names.append(basename)
+            known_face_encodings.append(encodings[0])
+
+    return known_names, known_face_encodings
+
+
+face_name=""
+
+def print_result(filename, name, distance, show_distance=False):
+	global face_name
+	face_name=name
+	if show_distance:
+		print("{},{},{}".format(filename, name, distance))
+	else:
+		print("{},{}".format(filename, name))
+
+
+def test_image(image_to_check, known_names, known_face_encodings, tolerance=0.6, show_distance=False):
+    unknown_image = face_recognition.load_image_file(image_to_check)
+
+    # Scale down image if it's giant so things run a little faster
+    if max(unknown_image.shape) > 1600:
+        pil_img = PIL.Image.fromarray(unknown_image)
+        pil_img.thumbnail((1600, 1600), PIL.Image.LANCZOS)
+        unknown_image = np.array(pil_img)
+
+    unknown_encodings = face_recognition.face_encodings(unknown_image)
+
+    for unknown_encoding in unknown_encodings:
+        distances = face_recognition.face_distance(known_face_encodings, unknown_encoding)
+        result = list(distances <= tolerance)
+
+        if True in result:
+            [print_result(image_to_check, name, distance, show_distance) for is_match, name, distance in zip(result, known_names, distances) if is_match]
+        else:
+            print_result(image_to_check, "unknown_person", None, show_distance)
+
+    if not unknown_encodings:
+        # print out fact that no faces were found in image
+        print_result(image_to_check, "no_persons_found", None, show_distance)
+
+
+def image_files_in_folder(folder):
+    return [os.path.join(folder, f) for f in os.listdir(folder) if re.match(r'.*\.(jpg|jpeg|png)', f, flags=re.I)]
+
+
+def process_images_in_process_pool(images_to_check, known_names, known_face_encodings, number_of_cpus, tolerance, show_distance):
+    if number_of_cpus == -1:
+        processes = None
+    else:
+        processes = number_of_cpus
+
+    # macOS will crash due to a bug in libdispatch if you don't use 'forkserver'
+    context = multiprocessing
+    if "forkserver" in multiprocessing.get_all_start_methods():
+        context = multiprocessing.get_context("forkserver")
+
+    pool = context.Pool(processes=processes)
+
+    function_parameters = zip(
+        images_to_check,
+        itertools.repeat(known_names),
+        itertools.repeat(known_face_encodings),
+        itertools.repeat(tolerance),
+        itertools.repeat(show_distance)
+    )
+
+    pool.starmap(test_image, function_parameters)
+
+
+
+def main(known_people_folder, image_to_check, cpus, tolerance, show_distance):
+    known_names, known_face_encodings = scan_known_people(known_people_folder)
+
+    # Multi-core processing only supported on Python 3.4 or greater
+    if (sys.version_info < (3, 4)) and cpus != 1:
+        click.echo("WARNING: Multi-processing support requires Python 3.4 or greater. Falling back to single-threaded processing!")
+        cpus = 1
+
+    if os.path.isdir(image_to_check):
+        if cpus == 1:
+            [test_image(image_file, known_names, known_face_encodings, tolerance, show_distance) for image_file in image_files_in_folder(image_to_check)]
+        else:
+            process_images_in_process_pool(image_files_in_folder(image_to_check), known_names, known_face_encodings, cpus, tolerance, show_distance)
+    else:
+        test_image(image_to_check, known_names, known_face_encodings, tolerance, show_distance)
+
+
 
 
 GPIO.setwarnings(False)
@@ -27,6 +139,9 @@ def Exit_gracefully(signal,frame):
 	client.publish("Door/joystick2", None, 0, True)
 	client.publish("Hatch/control", None, 0, True)
 	client.publish("Door/msg", None, 0, True)
+	client.publish("Rfid/add", None, 0, True)
+	client.publish("Rfid/delete", None, 0, True)
+	client.publish("Door/count",None,0,True)
 	client.disconnect()
 	print("Smart Door: Stoping services")
 		
@@ -40,6 +155,8 @@ def on_connect(client, userdata, flags, rc):
     print("Connected with result code "+str(rc))
     client.publish("Door/open_stats","10")
     client.publish("Door/hatch_stat","Close")
+    client.publish("Door/count","0")
+    client.publish("Door/auto","1")
  
     # Subscribing in on_connect() - if we lose the connection and
     # reconnect then subscriptions will be renewed.
@@ -52,10 +169,15 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("Door/hatch_stat")
     client.subscribe("Door/message")
     client.subscribe("Door/camera3")
+    client.subscribe("Rfid/add")
+    client.subscribe("Rfid/delete")
+    client.subscribe("Door/stats")
+    client.subscribe("Door/count")
+    client.subscribe("Door/auto")
  
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
-    global open_time,close_time,hatch_open,hatch_time
+    global open_time,close_time,hatch_open,hatch_time,auto_mode
     print(msg.topic+" "+str(msg.payload))
     #print(msg.payload)
     str3=str(msg.payload)
@@ -130,6 +252,26 @@ def on_message(client, userdata, msg):
         print("Uploading to cloud...")
         subprocess.call(["drive","push","-no-prompt","-quiet","./gdrive"])
         print("Uploaded successfully!")
+
+    if(msg.topic== "Rfid/add"):
+        print(res3[1])
+        f=open('./rfid/rfid.txt','a')
+        f.write(str(res3[1])+"\n")
+        f.close()
+        client.publish("Door/stats","Added "+str(res3[1]))
+    if(msg.topic== "Rfid/delete"):
+        subprocess.call(["rm","-r","./rfid/rfid.txt"])
+        os.mknod("./rfid/rfid.txt")
+        client.publish("Door/stats","Deleted all enteries")
+    if(msg.topic== "Door/auto"):
+        print(res3[1])
+        if(str(res3[1])=="0"):
+                auto_mode=0
+                client.publish("Door/stats","Auto Mode Off")
+        else:
+                auto_mode=1
+                client.publish("Door/stats","Auto Mode On")
+        
 		
         
 
@@ -148,8 +290,9 @@ client.connect_async("broker.hivemq.com", 1883, 60)
 # for information on how to use other loop*() functions
 client.loop_start()
 
-picture_of_me=face_recognition.load_image_file("./test/ssr.jpg")
-my_face_encoding=face_recognition.face_encodings(picture_of_me)[0]
+auto_mode=1
+check=0
+
 
 
 
@@ -192,6 +335,7 @@ attempt=3
 block=0
 block_time=time.time()
 block_val=1800
+door_time=time.time()
 
 pin1=17
 pin2=22
@@ -213,22 +357,40 @@ def open_gate(dir,val2):
 			#print("came here")
 			time.sleep(0.2)
 			door_open+=1
+			client.publish("Door/open_stats",str(10-door_open))
 			#print(door_open)
 	else:
 		while (door_open>val2):
+			dist1=distance(GPIO_TRIGGER,GPIO_ECHO)
+			dist5=distance(GPIO_TRIGGER,GPIO_ECHO)
+    
+		
+			if(dist1<12 and dist5<12):
+				time.sleep(0.1)
+			dist6=distance(GPIO_TRIGGER,GPIO_ECHO)
+			if(dist1<12 and dist5<12 and dist6<12):
+				client.publish("Door/stats","Obstruction in closing")
+				continue
 			motor_func(1,val+0.4,1)
 			#print("came here")
 			time.sleep(0.2)
 			door_open-=1
-	client.publish("Door/open_stats",str(10-door_open))
+			client.publish("Door/open_stats",str(10-door_open))
+			if(door_open==0):		
+				client.publish("Door/stats","Door Closed")
 
 
 
 
 def printKey(key):
-    global matrix,matrix_count,matrix_time,password,d, hatch_open, hatch_time,attempt,block_time,block_val,block
+    global matrix,matrix_count,matrix_time,password,d, hatch_open, hatch_time,attempt,block_time,block_val,block,face_name,door_open,auto_mode,door_time
     print("Pressed: "+key)
     #print(matrix)
+    if(door_open==10 and door_time + 10 < time.time() and auto_mode==1):
+        print('Door Access: Closing (Auto)')
+        open_gate(1,0)
+        door_open=0
+        check=0
     if(matrix_time + 10 <time.time() and matrix==1 and block==0):
         print('Door Access: Press * again to enter password (auto reset)')
         matrix=-1
@@ -262,6 +424,7 @@ def printKey(key):
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_password_open_"+dt+".jpg"])
                 print("Door Access: Opening")
                 open_gate(-1,10)
+                door_time=time.time()
             else:
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_password_Incorrect_"+dt+".jpg"])
                 
@@ -285,37 +448,24 @@ def printKey(key):
     	now=datetime.now()
     	dt=now.strftime("%d:%m:%y_%H:%M:%S")
       
-        
     	print("Processing...")
-    	unknown_pic=face_recognition.load_image_file("./test1/unknown_image.jpg")
-    	list2=face_recognition.face_encodings(unknown_pic)
-    	if(len(list2)==0):
-                print("No face detected")
-                return
-    	unknown_face_encoding=face_recognition.face_encodings(unknown_pic)[0]
-    	#proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./test/","./test1/"],stdout=subprocess.PIPE)
-    	#output=proc.stdout.read()
-    	#line=str(output)
-    	results=face_recognition.compare_faces([my_face_encoding],unknown_face_encoding)
+    	main("./test","./test1/unknown_image.jpg",1,0.4,False)        
+
     	
-    	print(results[0])
-    	return
-    	res=line.split(',')
-    	str2=res[1]
-    	res2=str2.split('\\')
     	res3="A person is waiting outside"
-    	if(res2[0]=="unknown_person"):
+    	if(face_name=="unknown_person"):
                 subprocess.call(["say",res3])
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_unknown_person_"+dt+".jpg"])
                 print("Door Access: No Match")  
-    	elif(res2[0]=="no_persons_found"):
+    	elif(face_name=="no_persons_found"):
                 subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_noone_detected_"+dt+".jpg"])
                 print("Door Access: No Face Found")                
     	else:
-                subprocess.call(["say",res2[0],"has","arrived"])
-                subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_"+res2[0]+"_"+dt+".jpg"])
+                subprocess.call(["say",face_name,"has","arrived"])
+                subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_"+face_name+"_"+dt+".jpg"])
                 print("Door Access: Opening")
                 open_gate(-1,10)
+                door_time=time.time()
     	time.sleep(1)
     	matrix=-1
     	matrix_count=0
@@ -329,10 +479,22 @@ def printKey(key):
         dt=now.strftime("%d:%m:%y_%H:%M:%S")
         subprocess.call(["cp","./test1/unknown_image.jpg","./log/door_"+text+"_"+dt+".jpg"])
         print(id)
-        print("Welcome "+text+ " !")
-        subprocess.call(["say",text,"has","arrived"])
-        print("Door Access: Opening")
-        open_gate(-1,10)
+
+        f=open('rfid/rfid.txt','r')
+        f.seek(0)
+        line=f.readline()
+        while line:
+                if(line==str(id)+"\n"):
+                        print("Welcome "+text+ " !")
+                        subprocess.call(["say",text,"has","arrived"])
+                        print("Door Access: Opening")
+                        open_gate(-1,10)
+                        door_time=time.time()
+                line=f.readline()
+        f.close()
+
+
+        
     elif(key == 'B' and matrix==-1):
         if(hatch_open==0):
                 print("Hatch Access: Be Ready for Image capture")
@@ -341,25 +503,20 @@ def printKey(key):
                 now=datetime.now()
                 dt=now.strftime("%d:%m:%y_%H:%M:%S")
                 #print(dt)
-                print("Processing...")
+              
                 
-                proc=subprocess.Popen(["face_recognition","--tolerance","0.4","./hatch/","./test1/"],stdout=subprocess.PIPE)
-                output=proc.stdout.read()
-                line=str(output)
-                res=line.split(',')
-	    
-                str2=res[1]
-                res2=str2.split('\\')
+                print("Processing...")
+                main("./hatch","./test1/unknown_image.jpg",1,0.4,False) 
          
 	        
-                if(res2[0]=="unknown_person"):
+                if(face_name=="unknown_person"):
                         print("Hatch Access: No Match")  
                         subprocess.call(["cp","./test1/unknown_image.jpg","./log/hatch_unknown_person_"+dt+".jpg"])
-                elif(res2[0]=="no_persons_found"):
+                elif(face_name=="no_persons_found"):
                         print("Hatch Access: No Face Found") 
                         subprocess.call(["cp","./test1/unknown_image.jpg","./log/hatch_noone_detected_"+dt+".jpg"])               
                 else:
-                        subprocess.call(["cp","./test1/unknown_image.jpg","./log/hatch_"+res2[0]+"_"+dt+".jpg"])
+                        subprocess.call(["cp","./test1/unknown_image.jpg","./log/hatch_"+face_name+"_"+dt+".jpg"])
                         print("Hatch Access: Opening")
                         motor_func2(1,open_time)
                         hatch_open=1
@@ -368,7 +525,7 @@ def printKey(key):
         else:
                 hatch_open=0
                 print("Hatch Access: Closing (Manual)")
-                motor_func2(1,close_time)
+                motor_func2(-1,close_time)
         time.sleep(1)
         matrix=-1
         matrix_count=0
@@ -436,7 +593,8 @@ def printKey(key):
                             	print(now)
                             	if(now>=now1 and now<=now2):
                             	    	print("Door Access: Opening")
-                            	    	open_gate(-1,10)			
+                            	    	open_gate(-1,10)
+                            	    	door_time=time.time()			
                         line=f.readline()
                         cnt+=1  
         	f.close()
@@ -664,6 +822,15 @@ print ('Smart Door: Joystick, Password, Face recognition and MQTT Controls On')
 #print('| {0:>6} | {1:>6} | {2:>6} | {3:>6} |'.format(*range(4)))
 print('-' * 70)
 
+
+auto_trigger=23
+auto_echo=24
+GPIO.setup(auto_trigger,GPIO.OUT)
+GPIO.setup(auto_echo,GPIO.IN)
+GPIO.output(auto_trigger,GPIO.LOW)
+
+
+
 person_count=0
 sensor1=0
 sensor2=0
@@ -697,6 +864,17 @@ while True:
     # Rotating STEPPER 
     dist1=distance(GPIO_TRIGGER,GPIO_ECHO)
     dist5=distance(GPIO_TRIGGER,GPIO_ECHO)
+    a1=distance(auto_trigger,auto_echo)
+    a2=distance(auto_trigger,auto_echo)
+    #print(a1)
+    #print(a2)
+    if(auto_mode==1 and a1 < 25 and a2<25 and door_open<=5):
+        check=1
+        print('Door Access: Opening (Auto)')
+        open_gate(-1,10)
+        door_open=10
+        door_time=time.time()
+		
     if(dist1<12 and dist5<12):
         time.sleep(0.1)
     dist6=distance(GPIO_TRIGGER,GPIO_ECHO)
@@ -721,7 +899,13 @@ while True:
                 
             else:
                 person_count-=1
+                if(check==1):		
+                    print('Door Access: Closing (Auto)')
+                    open_gate(1,0)
+                    door_open=0
+                    check=0
                 print(person_count)
+                client.publish("Door/count",str(person_count))
                 time.sleep(2)
                 print("Person Count: sleep UP")
                 sensor2=0
@@ -736,6 +920,7 @@ while True:
             else:
                 person_count+=1
                 print(person_count)
+                client.publish("Door/count",str(person_count))
                 time.sleep(2)
                 print("Person Count: sleep UP")
                 sensor1=0
@@ -771,6 +956,12 @@ while True:
         print('Hatch Access: Closing (Auto)')
         hatch_open=0
         motor_func2(-1,close_time)
+
+    if(door_open==10 and door_time + 10 < time.time() and auto_mode==1):
+        print('Door Access: Closing (Auto)')
+        open_gate(1,0)
+        door_open=0
+        check=0
 
     if(block_time + block_val <time.time() and block==1):
         print('Door Access: Password access unblocked')
